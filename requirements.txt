@@ -1,0 +1,9 @@
+inplace-abn
+pycocotools
+randaugment
+sklearn
+pandas
+wandb
+umap-learn
+plotly
+seaborn
