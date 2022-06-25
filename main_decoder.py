@@ -42,7 +42,7 @@ def parse_option():
     ###############################
     ####### optim parameters ######
     ###############################
-    parser.add_argument('--learning_rate', type=float, default=0.05,
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
                         help='learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                         help='weight decay')
@@ -67,7 +67,7 @@ def parse_option():
                         choices=['CrossEntropy', 'Asymetric'], help='choose method')
     parser.add_argument('--freeze', default=True, type=bool,
                         metavar='N', help='freeze backbone')
-    parser.add_argument('--batch-size', default=256, type=int,
+    parser.add_argument('--batch-size', default=56, type=int,
                         metavar='N', help='mini-batch size')
     parser.add_argument('--epochs', type=int, default=40,
                         help='number of training epochs')
@@ -285,10 +285,10 @@ def main():
                 config={
                     "data": args.data,
                     "image-size": args.image_size,
-                    "batch-size": args.batch_size_con,
-                    "epochs": args.epochs_con,
-                    "learning_rate": args.learning_rate_con,
-                    "weight_decay": args.weight_decay_con,
+                    "batch-size": args.batch_size,
+                    "epochs": args.epochs,
+                    "learning_rate": args.learning_rate,
+                    "weight_decay": args.weight_decay,
                     "method": args.method,
                     "seed": args.seed,
                     "freeze": args.freeze,
