@@ -266,6 +266,7 @@ def main():
         resume = True
     else:
         resume = False
+        os.makedirs(log_path, exist_ok=True)
     
     # Log wandb
     if args.rank == 0:
@@ -304,8 +305,8 @@ def main():
     # Load checkpoint
     if resume:
         # Get last restore
-        checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
-        checkpoint_best = os.path.join(log_path, "best_checkpoint.pth.tar")
+        checkpoint_last = os.path.join(log_path, "last_checkpoint.pt")
+        checkpoint_best = os.path.join(log_path, "best_checkpoint.pt")
         checkpoint = torch.load(
             wandb.restore(checkpoint_last),
             map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
@@ -362,46 +363,46 @@ def main():
             # Update best loss
             if "map" not in best.keys():
                 best = { 
-                    'epoch': epoch,
+                    'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
+                    'loss': scores[1],
                     'map': max(val_map, val_map_ema),
                 }
                 # Save best loss
-                checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
+                checkpoint_path = os.path.join(log_path, f"best_checkpoint.pt")
                 torch.save(best, checkpoint_path)
                 wandb.save(checkpoint_path)
             else:
                 if max(val_map, val_map_ema) > best["map"]:
                     best = { 
-                        'epoch': epoch,
+                        'epoch': scores[0],
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': loss,
+                        'loss': scores[1],
                         'map': max(val_map, val_map_ema),
                     }
                     # Save best loss
-                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
+                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pt")
                     torch.save(best, checkpoint_path)
                     wandb.save(checkpoint_path)
             # Save our checkpoint loc
             if epoch % args.checkpoint_freq == 0 or epoch == args.epochs:
-                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
-                checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
+                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pt")
+                checkpoint_last = os.path.join(log_path, "last_checkpoint.pt")
                 torch.save({ 
-                    'epoch': epoch,
+                    'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
+                    'loss': scores[1],
                     'map': max(val_map, val_map_ema),
                     }, checkpoint_path)
                 wandb.save(checkpoint_path)
                 torch.save({ 
-                    'epoch': epoch,
+                    'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
+                    'loss': scores[1],
                     'map': max(val_map, val_map_ema),
                     }, checkpoint_last)
                 wandb.save(checkpoint_last)
@@ -460,12 +461,12 @@ def train(train_loader, model, optimizer, criterion, scheduler, ema, epoch, logg
         end = time.time()
         
         if args.rank == 0 and idx % 50 == 0:
-            logger.info(f'''
-                Train: Epoch [{epoch}], Step [{idx}/{len(train_loader)}], 
-                Loss: {loss.item():.3f}, Mean Average Precision: {mAP_score:.3f}, 
-                Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f}),
-                Data Time {data_time.val:.3f} ({data_time.avg:.3f})''')
-    
+            logger.info((
+                f'Train: Epoch [{epoch}], Step [{idx}/{len(train_loader)}], '
+                f'Loss: {loss.item():.3f}, Mean Average Precision: {mAP_score:.3f}, '
+                f'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f}), '
+                f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})'
+            ))
     return (epoch, losses.avg, mAPs.avg)
 
 def validate(val_loader, model, ema):
@@ -493,3 +494,7 @@ def validate(val_loader, model, ema):
     mAP_score = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs).numpy())
     mAP_score_ema = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs_ema).numpy())
     return mAP_score, mAP_score_ema
+
+
+if __name__ == '__main__':
+    main()

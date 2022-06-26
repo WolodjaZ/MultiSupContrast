@@ -64,11 +64,6 @@ def initialize_exp(params, *args, dump_params=True):
     if dump_params:
         pickle.dump(params, open(os.path.join(params.dump_path, "params.pkl"), "wb"))
 
-    # create repo to store checkpoints
-    params.dump_checkpoints = os.path.join(params.dump_path, "checkpoints")
-    if not params.rank and not os.path.isdir(params.dump_checkpoints):
-        os.mkdir(params.dump_checkpoints)
-
     # create a logger
     logger = create_logger(
         os.path.join(params.dump_path, "train.log"), rank=params.rank
@@ -255,11 +250,11 @@ def add_weight_decay(model, weight_decay=1e-4, skip_list=()):
         {'params': decay, 'weight_decay': weight_decay}]
 
 def adjust_learning_rate(args, optimizer, epoch):
-    lr = args.learning_rate_con
+    lr = args.learning_rate
     if args.cosine:
         eta_min = lr * (args.lr_decay_rate ** 3)
         lr = eta_min + (lr - eta_min) * (
-                1 + math.cos(math.pi * epoch / args.epochs_con)) / 2
+                1 + math.cos(math.pi * epoch / args.epochs)) / 2
     else:
         steps = np.sum(epoch > np.asarray(args.lr_decay_epochs))
         if steps > 0:

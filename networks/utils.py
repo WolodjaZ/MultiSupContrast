@@ -2,9 +2,9 @@ import os
 import torch
 import torch.nn as nn
 from urllib import request
-from ml_decoder import MLDecoder
-from tresnet import TResnetM, TResnetL, TResnetXL
-from resnet_big import Resnet18, Resnet34, Resnet50, Resnet101
+from networks.ml_decoder import MLDecoder
+from networks.tresnet import TResnetM, TResnetL, TResnetXL
+from networks.resnet_big import Resnet18, Resnet34, Resnet50, Resnet101
 
 
 def create_model_base(args, load_head=False):

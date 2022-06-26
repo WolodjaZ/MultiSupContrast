@@ -8,7 +8,6 @@ import wandb
 import torch
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import plotly.express as px
 import matplotlib.pyplot as plt
 import torch.backends.cudnn as cudnn
@@ -188,6 +187,7 @@ def main():
                                 transforms.ToTensor(),
                                 ]))
             )
+    train_dataset = torch.utils.data.Subset(train_dataset, torch.arange(500))
     sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -249,6 +249,7 @@ def main():
         resume = True
     else:
         resume = False
+        os.makedirs(log_path, exist_ok=True)
     
     # Log wandb
     if args.rank == 0:
@@ -269,7 +270,7 @@ def main():
                     "data": args.data,
                     "image-size": args.image_size,
                     "batch-size": args.batch_size,
-                    "epochs": args.epochs_con,
+                    "epochs": args.epochs,
                     "learning_rate": args.learning_rate,
                     "lr_decay_epochs": args.lr_decay_epochs,
                     "lr_decay_rate": args.lr_decay_rate,
@@ -288,37 +289,35 @@ def main():
         wandb.watch(model, log="all")
         
         # Log dataset plots
-        logger.info("Logging correlation and bar plot of labels.")
-        labels_all = []
-        for idx, (_, labels) in enumerate(train_loader):
-            labels_all.append(labels.max(dim=1)[0].cpu().detach())
-        labels_all = torch.cat(labels_all).numpy()
-        df_labels = pd.DataFrame(labels_all)
-        fig_corelation, ax = plt.subplots(figsize=(16, 16))
-        sns.heatmap(df_labels.corr(), annot = True)
-        bars = labels_all.nonzero()[0]
-        fig_bar, ax = plt.subplots(figsize=(16, 16))
-        sns.histplot(bars)
-        wandb.run.summary.update({
-             "Barplot labels": fig_bar,
-             "Correlation of labels": fig_corelation
-        })
-        logger.info("Finished logging correlation and bar plot of labels.")
+        if True:
+            logger.info("Logging correlation and bar plot of labels.")
+            labels_all = []
+            for idx, (_, labels) in enumerate(train_loader):
+                labels_all.append(labels.max(dim=1)[0].cpu().detach())
+            labels_all = torch.cat(labels_all).numpy()
+            df_labels = pd.DataFrame(labels_all)
+            fig_corelation = px.imshow(df_labels.corr())
+            bars = labels_all.nonzero()[0]
+            fig_bar = px.histogram(bars)
+            wandb.run.summary.update({
+                 "Barplot labels": fig_bar,
+                "Correlation of labels": fig_corelation
+            })
+            logger.info("Finished logging correlation and bar plot of labels.")
         
     # Load checkpoint
     if resume:
         # Get last restore
         checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
         checkpoint_best = os.path.join(log_path, "best_checkpoint.pth.tar")
-        checkpoint = torch.load(
-            wandb.restore(checkpoint_last),
-            map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
+        logger.info(f"Loading checkpooint {checkpoint_last}")
+        checkpoint = torch.load(checkpoint_last,
+               map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch'] + 1
         loss = checkpoint['loss']
-        best = torch.load(
-            wandb.restore(checkpoint_best),
+        best = torch.load(checkpoint_best,
             map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
     else:
         start_epoch = 1
@@ -355,16 +354,16 @@ def main():
             # Log to wandb metrics
             wandb.log({
                 "loss": scores[1],
-                "learning_rate": optimizer.optim.param_groups[0]["lr"],
+                "learning_rate": optimizer.param_groups[0]["lr"],
                 "umap_embeddings": fig_validate,
             }, step=scores[0])
             # Update best loss
             if "loss" not in best.keys():
                 best = { 
-                    'epoch': epoch,
+                    'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
+                    'loss': scores[1],
                 }
                 # Save best loss
                 checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
@@ -373,10 +372,10 @@ def main():
             else:
                 if scores[1] < best["loss"]:
                     best = { 
-                        'epoch': epoch,
+                        'epoch': scores[0],
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': loss,
+                        'loss': scores[1],
                     }
                     # Save best loss
                     checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
@@ -387,17 +386,17 @@ def main():
                 checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
                 checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
                 torch.save({ 
-                    'epoch': epoch,
+                    'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
+                    'loss': scores[1],
                     }, checkpoint_path)
                 wandb.save(checkpoint_path)
                 torch.save({ 
-                    'epoch': epoch,
+                    'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': loss,
+                    'loss': scores[1],
                     }, checkpoint_last)
                 wandb.save(checkpoint_last)
 
@@ -466,10 +465,11 @@ def train(train_loader, model, optimizer, criterion, epoch, logger, args):
         end = time.time()
         
         if args.rank == 0 and idx % 50 == 0:
-            logger.info(f'''
-                Train: Epoch [{epoch}], Step [{idx}/{len(train_loader)}], Loss: {loss.item():.3f}, 
-                Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f}),
-                Data Time {data_time.val:.3f} ({data_time.avg:.3f})''')
+            logger.info((
+                f'Train: Epoch [{epoch}], Step [{idx}/{len(train_loader)}], Loss: {loss.item():.3f}, '
+                f'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f}), '
+                f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})'
+            ))
     
     return (epoch, losses.avg)
 
@@ -499,13 +499,16 @@ def validate(train_loader, model, vis_3d=True):
     
     # Do dimension reduction
     embedding = reducer.fit_transform(torch.cat(outputs).numpy())
-    labes = torch.cat(labels).numpy()
+    labels = torch.cat(labels)
     
     # Create text for embeding
     results = []
     for label in labels:
-        result = label.nonzero()[0]
-        results.append(np.array2string(result, separator=','))
+        result = torch.nonzero(label).reshape(-1)
+        if result.shape[0] > 1:
+            results.append(str(np.array2string(result.numpy(), separator=',')))
+        else:
+            results.append(str(result.numpy()[0]))
     
     # Create dataframe
     if vis_3d:
@@ -513,7 +516,7 @@ def validate(train_loader, model, vis_3d=True):
             'x': embedding[:,0],
             'y': embedding[:,1],
             'z': embedding[:,2],
-            'label': result,
+            'label': results,
             }
         )
         # Create scatter plot
@@ -531,3 +534,7 @@ def validate(train_loader, model, vis_3d=True):
         fig = px.scatter(df, x='x', y='y')
         
     return fig
+
+
+if __name__ == '__main__':
+    main()

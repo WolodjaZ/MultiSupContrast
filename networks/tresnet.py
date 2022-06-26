@@ -4,9 +4,9 @@ from collections import OrderedDict
 from torch.nn import Module as Module
 from inplace_abn import InPlaceABN, ABN
 
-from .layers.avg_pool import FastAvgPool2d
-from .layers.anti_aliasing import AntiAliasDownsampleLayer
-from .layers.general_layers import SEModule, SpaceToDepthModule
+from networks.layers.avg_pool import FastAvgPool2d
+from networks.layers.anti_aliasing import AntiAliasDownsampleLayer
+from networks.layers.general_layers import SEModule, SpaceToDepthModule
 
 
 def InplacABN_to_ABN(module: nn.Module) -> nn.Module:
