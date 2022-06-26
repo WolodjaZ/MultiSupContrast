@@ -35,13 +35,13 @@ def parse_option():
     ###############################
     ####### optim parameters ######
     ###############################
-    parser.add_argument('--learning_rate', type=float, default=0.05,
+    parser.add_argument('--learning_rate', type=float, default=0.01,
                         help='learning rate')
-    parser.add_argument('--lr_decay_epochs', type=str, default='700,800,900',
+    parser.add_argument('--lr_decay_epochs', type=str, default='60,75,90',
                         help='where to decay lr, can be a list')
-    parser.add_argument('--lr_decay_rate', type=float, default=0.1,
+    parser.add_argument('--lr_decay_rate', type=float, default=0.2,
                         help='decay rate for learning rate')
-    parser.add_argument('--weight_decay', type=float, default=1e-4,
+    parser.add_argument('--weight_decay', type=float, default=0,
                         help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='momentum')
@@ -72,7 +72,7 @@ def parse_option():
                         metavar='N', help='freeze backbone')
     parser.add_argument('--batch-size', default=256, type=int,
                         metavar='N', help='mini-batch size')
-    parser.add_argument('--epochs', type=int, default=1000,
+    parser.add_argument('--epochs', type=int, default=100,
                         help='number of training epochs')
     parser.add_argument('--sync_bn', type=bool, default=False,
                         help='synchronic batch only with distributed gpu')
@@ -309,12 +309,12 @@ def main():
                 config={
                     "data": args.data,
                     "image-size": args.image_size,
-                    "batch-size": args.batch_size_con,
+                    "batch-size": args.batch_size,
                     "epochs": args.epochs_con,
-                    "learning_rate": args.learning_rate_con,
+                    "learning_rate": args.learning_rate,
                     "lr_decay_epochs": args.lr_decay_epochs,
                     "lr_decay_rate": args.lr_decay_rate,
-                    "weight_decay": args.weight_decay_con,
+                    "weight_decay": args.weight_decay,
                     "momentum": args.momentum,
                     "method": args.method,
                     "method_used": args.method_used,
