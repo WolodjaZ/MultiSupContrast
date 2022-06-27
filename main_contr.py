@@ -289,21 +289,20 @@ def main():
         wandb.watch(model, log="all")
         
         # Log dataset plots
-        if True:
-            logger.info("Logging correlation and bar plot of labels.")
-            labels_all = []
-            for idx, (_, labels) in enumerate(train_loader):
-                labels_all.append(labels.max(dim=1)[0].cpu().detach())
-            labels_all = torch.cat(labels_all).numpy()
-            df_labels = pd.DataFrame(labels_all)
-            fig_corelation = px.imshow(df_labels.corr())
-            bars = labels_all.nonzero()[0]
-            fig_bar = px.histogram(bars)
-            wandb.run.summary.update({
-                 "Barplot labels": fig_bar,
-                "Correlation of labels": fig_corelation
-            })
-            logger.info("Finished logging correlation and bar plot of labels.")
+        logger.info("Logging correlation and bar plot of labels.")
+        labels_all = []
+        for idx, (_, labels) in enumerate(train_loader):
+            labels_all.append(labels.max(dim=1)[0].cpu().detach())
+        labels_all = torch.cat(labels_all).numpy()
+        df_labels = pd.DataFrame(labels_all)
+        fig_corelation = px.imshow(df_labels.corr())
+        bars = labels_all.nonzero()[0]
+        fig_bar = px.histogram(bars)
+        wandb.run.summary.update({
+            "Barplot labels": fig_bar,
+            "Correlation of labels": fig_corelation
+        })
+        logger.info("Finished logging correlation and bar plot of labels.")
         
     # Load checkpoint
     if resume:
@@ -391,7 +390,6 @@ def main():
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
                     }, checkpoint_path)
-                wandb.save(checkpoint_path)
                 torch.save({ 
                     'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
@@ -402,6 +400,8 @@ def main():
 
     if args.rank == 0:
         # End wandb
+        wandb.run.summary["best_loss"] = best['loss']
+        wandb.run.summary["best_epoch"] = best['epoch']
         wandb.finish()
 
     ###############################

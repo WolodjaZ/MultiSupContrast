@@ -220,8 +220,7 @@ def main():
     model = create_model_base(args)
     if args.model_path:
         # Loading model
-        checkpoint = torch.load(
-            wandb.restore(args.model_path),
+        checkpoint = torch.load(args.model_path,
             map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
         model.load_state_dict(checkpoint['model_state_dict'])
         # freeze
@@ -307,15 +306,13 @@ def main():
         # Get last restore
         checkpoint_last = os.path.join(log_path, "last_checkpoint.pt")
         checkpoint_best = os.path.join(log_path, "best_checkpoint.pt")
-        checkpoint = torch.load(
-            wandb.restore(checkpoint_last),
+        checkpoint = torch.load(checkpoint_last,
             map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch'] + 1
         loss = checkpoint['loss']
-        best = torch.load(
-            wandb.restore(checkpoint_best),
+        best = torch.load(checkpoint_best,
             map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
     else:
         start_epoch = 0
@@ -397,7 +394,6 @@ def main():
                     'loss': scores[1],
                     'map': max(val_map, val_map_ema),
                     }, checkpoint_path)
-                wandb.save(checkpoint_path)
                 torch.save({ 
                     'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
@@ -409,6 +405,9 @@ def main():
 
     if args.rank == 0:
         # End wandb
+        wandb.run.summary["best_Mean Average Precision"] = best['map']
+        wandb.run.summary["best_loss"] = best['loss']
+        wandb.run.summary["best_epoch"] = best['epoch']
         wandb.finish()
 
     ###############################
