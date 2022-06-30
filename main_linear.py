@@ -14,8 +14,9 @@ from torch.cuda.amp import GradScaler, autocast
 from losses import AsymmetricLoss
 from datasets import CocoDetection, MultiLabelCelebA, VOCDataset
 from networks.utils import create_model_base, add_classification_head
-from utils import init_distributed_mode, fix_random_seeds, mAP, \
+from utils import init_distributed_mode, fix_random_seeds, mAP, ModelEma, \
     initialize_exp, AverageMeter, adjust_learning_rate, warmup_learning_rate
+from main_decoder import validate
 
 
 def parse_option():
@@ -346,6 +347,7 @@ def main():
     ########### TRAINING ##########
     ###############################
     best = {}
+    ema = ModelEma(model, 0.9997)
     for epoch in range(start_epoch, args.epochs+1):
         
         # train the network for one epoch
@@ -362,6 +364,7 @@ def main():
             model,
             optimizer,
             criterion,
+            ema,
             epoch,
             logger,
             args
@@ -370,36 +373,41 @@ def main():
         # save checkpoints
         if args.rank == 0:
             # Validate
-            val_map = validate(val_loader, model)
-            logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map:.3f}")
+            val_map, val_map_ema = validate(val_loader, model, ema)
+            logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map[0]:.3f}")
             # Log to wandb metrics
+            val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
+            val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
             wandb.log({
                 "loss": scores[1],
                 "map": scores[2],
                 "learning_rate": optimizer.param_groups[0]["lr"],
-                "val_map": val_map,
-            }, step=scores[0])
+                "val_map": val_map[0],
+                "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
+                "val_map_ema": val_map_ema[0],
+                "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
+            }, step=epoch)
             # Update best loss
             if "map" not in best.keys():
                 best = { 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
-                    'map': val_map,
+                    'map': max(val_map[0], val_map_ema[0]),
                 }
                 # Save best loss
                 checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
                 torch.save(best, checkpoint_path)
                 wandb.save(checkpoint_path)
             else:
-                if val_map > best["map"]:
+                if max(val_map[0], val_map_ema[0]) > best["map"]:
                     best = { 
-                        'epoch': scores[0],
+                        'epoch': epoch,
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': scores[1],
-                        'map': val_map,
+                        'map': max(val_map[0], val_map_ema[0]),
                     }
                     # Save best loss
                     checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
@@ -410,26 +418,27 @@ def main():
                 checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
                 checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
                 torch.save({ 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
-                    'map': val_map,
+                    'map': max(val_map[0], val_map_ema[0]),
                     }, checkpoint_path)
                 torch.save({ 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
-                    'map': val_map,
+                    'map': max(val_map[0], val_map_ema[0]),
                     }, checkpoint_last)
                 wandb.save(checkpoint_last)
 
     if args.rank == 0:
-        # End wandb
+        #Log final metrics
         wandb.run.summary["best_Mean Average Precision"] = best['map']
         wandb.run.summary["best_loss"] = best['loss']
         wandb.run.summary["best_epoch"] = best['epoch']
+        # End wandb
         wandb.finish()
 
     ###############################
@@ -439,7 +448,7 @@ def main():
     logger.info(f"Best Mean Average Precision:: {best['map']} with loss {best['loss']} on epoch {best['epoch']}")
 
 
-def train(train_loader, model, optimizer, criterion, epoch, logger, args):
+def train(train_loader, model, optimizer, criterion, ema, epoch, logger, args):
     model.train()
     
     batch_time = AverageMeter()
@@ -476,6 +485,8 @@ def train(train_loader, model, optimizer, criterion, epoch, logger, args):
         scaler.step(optimizer)
         scaler.update()
         
+        ema.update(model)
+        
         # Measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
@@ -488,26 +499,6 @@ def train(train_loader, model, optimizer, criterion, epoch, logger, args):
                 f'Data Time {data_time.val:.3f} ({data_time.avg:.3f})'
             ))
     return (epoch, losses.avg, mAPs.avg)
-
-def validate(val_loader, model):
-    model.eval()
-    
-    labels_all = []
-    outputs = []
-    
-    with torch.no_grad():
-        for idx, (images, labels) in enumerate(val_loader):
-            labels = labels.max(dim=1)[0]
-            if torch.cuda.is_available():
-                images = images.cuda()
-            # Gather results
-            with autocast():
-                outputs.append(model(images).cpu().detach())
-            labels_all.append(labels.cpu().detach())
-    
-    #Calc MAP
-    mAP_score = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs).numpy())
-    return mAP_score
 
 
 if __name__ == '__main__':

@@ -305,8 +305,8 @@ def main():
     # Load checkpoint
     if resume:
         # Get last restore
-        checkpoint_last = os.path.join(log_path, "last_checkpoint.pt")
-        checkpoint_best = os.path.join(log_path, "best_checkpoint.pt")
+        checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
+        checkpoint_best = os.path.join(log_path, "best_checkpoint.pth.tar")
         checkpoint = torch.load(checkpoint_last,
             map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -349,66 +349,71 @@ def main():
         if args.rank == 0:
             # Validate
             val_map, val_map_ema = validate(val_loader, model, ema)
-            logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map:.3f}")
+            logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map[0]:.3f}")
             # Log to wandb metrics
+            val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
+            val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
             wandb.log({
                 "loss": scores[1],
                 "map": scores[2],
                 "learning_rate": optimizer.param_groups[0]["lr"],
-                "val_map": val_map,
-                "val_map_ema": val_map_ema,
-            }, step=scores[0])
+                "val_map": val_map[0],
+                "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
+                "val_map_ema": val_map_ema[0],
+                "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
+            }, step=epoch)
             # Update best loss
             if "map" not in best.keys():
                 best = { 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
-                    'map': max(val_map, val_map_ema),
+                    'map': max(val_map[0], val_map_ema[0]),
                 }
                 # Save best loss
-                checkpoint_path = os.path.join(log_path, f"best_checkpoint.pt")
+                checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
                 torch.save(best, checkpoint_path)
                 wandb.save(checkpoint_path)
             else:
-                if max(val_map, val_map_ema) > best["map"]:
+                if max(val_map[0], val_map_ema[0]) > best["map"]:
                     best = { 
-                        'epoch': scores[0],
+                        'epoch': epoch,
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': scores[1],
-                        'map': max(val_map, val_map_ema),
+                        'map': max(val_map[0], val_map_ema[0]),
                     }
                     # Save best loss
-                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pt")
+                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
                     torch.save(best, checkpoint_path)
                     wandb.save(checkpoint_path)
             # Save our checkpoint loc
             if epoch % args.checkpoint_freq == 0 or epoch == args.epochs:
-                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pt")
-                checkpoint_last = os.path.join(log_path, "last_checkpoint.pt")
+                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
+                checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
                 torch.save({ 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
-                    'map': max(val_map, val_map_ema),
+                    'map': max(val_map[0], val_map_ema[0]),
                     }, checkpoint_path)
                 torch.save({ 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
-                    'map': max(val_map, val_map_ema),
+                    'map': max(val_map[0], val_map_ema[0]),
                     }, checkpoint_last)
                 wandb.save(checkpoint_last)
 
     if args.rank == 0:
-        # End wandb
+        #Log final metrics
         wandb.run.summary["best_Mean Average Precision"] = best['map']
         wandb.run.summary["best_loss"] = best['loss']
         wandb.run.summary["best_epoch"] = best['epoch']
+        # End wandb
         wandb.finish()
 
     ###############################
@@ -445,7 +450,7 @@ def train(train_loader, model, optimizer, criterion, scheduler, ema, epoch, logg
         loss = criterion(output, labels.float())
         # update metric
         losses.update(loss.item(), bsz)
-        mAP_score = mAP(labels.cpu().detach().numpy(), output.cpu().detach().numpy())
+        mAP_score, _ = mAP(labels.cpu().detach().numpy(), output.cpu().detach().numpy())
         mAPs.update(mAP_score, bsz)
         
         # Optimizer
@@ -491,9 +496,9 @@ def validate(val_loader, model, ema):
             labels_all.append(labels.cpu().detach())
     
     #Calc MAP
-    mAP_score = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs).numpy())
-    mAP_score_ema = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs_ema).numpy())
-    return mAP_score, mAP_score_ema
+    mAP_score, ap_score = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs).numpy())
+    mAP_score_ema, ap_score_ema = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs_ema).numpy())
+    return (mAP_score, ap_score), (mAP_score_ema, ap_score_ema)
 
 
 if __name__ == '__main__':

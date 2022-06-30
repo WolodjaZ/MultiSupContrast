@@ -121,7 +121,8 @@ def mAP(targs, preds):
         targets = targs[:, k]
         # compute average precision
         ap[k] = average_precision(scores, targets)
-    return 100 * ap.mean()
+    map = 100 * ap.mean()
+    return map, ap
 
 
 class AverageMeter(object):
