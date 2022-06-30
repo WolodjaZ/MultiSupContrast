@@ -123,9 +123,9 @@ class MultiSupConLoss(nn.Module):
         mean_multi_log_prob_pos = (mask * multi_log_prob).sum(1) / mask.sum(1)
         # loss
         loss = - (self.temperature / self.base_temperature) * mean_multi_log_prob_pos
-        loss = loss.view(anchor_count, batch_size).mean()
+        loss = loss.view(anchor_count, batch_size)
 
-        return loss
+        return loss.mean()
 
 
 class AsymmetricLoss(nn.Module):
@@ -173,7 +173,7 @@ class AsymmetricLoss(nn.Module):
                 torch.set_grad_enabled(True)
             loss *= one_sided_w
 
-        return -loss.sum()
+        return -loss.mean()
 
 
 class AsymmetricLossOptimized(nn.Module):

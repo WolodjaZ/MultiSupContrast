@@ -206,8 +206,6 @@ def main():
                 transforms.ToTensor()
             ]),
         )
-    train_dataset = torch.utils.data.Subset(train_dataset, torch.arange(500))
-    val_dataset = torch.utils.data.Subset(val_dataset, torch.arange(500))
     sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -292,7 +290,7 @@ def main():
     
     # Log wandb
     if args.rank == 0:
-        wandb.login(key="c77809672cac9c98eb589447ff82854fba590ff7")
+        wandb.login()
         if resume:
             wandb.init(
                 project="test-project", 
@@ -309,7 +307,7 @@ def main():
                     "data": args.data,
                     "image-size": args.image_size,
                     "batch-size": args.batch_size,
-                    "epochs": args.epochs_con,
+                    "epochs": args.epochs,
                     "learning_rate": args.learning_rate,
                     "lr_decay_epochs": args.lr_decay_epochs,
                     "lr_decay_rate": args.lr_decay_rate,
@@ -321,7 +319,8 @@ def main():
                     "warm": args.warm,
                     "seed": args.seed,
                     "freeze": args.freeze,
-                    "sync_bn:": args.sync_bn
+                    "sync_bn:": args.sync_bn,
+                    "numb_of_gpu_used": args.gpu_to_work_on
                 }
             )
         wandb.watch(model, log="all")
@@ -329,8 +328,8 @@ def main():
     # Load checkpoint
     if resume:
         # Get last restore
-        checkpoint_last = os.path.join(log_path, "last_checkpoint.pt")
-        checkpoint_best = os.path.join(log_path, "best_checkpoint.pt")
+        checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
+        checkpoint_best = os.path.join(log_path, "best_checkpoint.pth.tar")
         checkpoint = torch.load(checkpoint_last,
             map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -377,7 +376,7 @@ def main():
             wandb.log({
                 "loss": scores[1],
                 "map": scores[2],
-                "learning_rate": optimizer.optim.param_groups[0]["lr"],
+                "learning_rate": optimizer.param_groups[0]["lr"],
                 "val_map": val_map,
             }, step=scores[0])
             # Update best loss
@@ -403,13 +402,13 @@ def main():
                         'map': val_map,
                     }
                     # Save best loss
-                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pt")
+                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
                     torch.save(best, checkpoint_path)
                     wandb.save(checkpoint_path)
             # Save our checkpoint loc
             if epoch % args.checkpoint_freq == 0 or epoch == args.epochs:
-                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pt")
-                checkpoint_last = os.path.join(log_path, "last_checkpoint.pt")
+                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
+                checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
                 torch.save({ 
                     'epoch': scores[0],
                     'model_state_dict': model.state_dict(),
@@ -466,7 +465,7 @@ def train(train_loader, model, optimizer, criterion, epoch, logger, args):
         # Compute loss
         with autocast():  # mixed precision
             output = model(images).float()
-        loss = criterion(output, labels)
+        loss = criterion(output, labels.float())
         # update metric
         losses.update(loss.item(), bsz)
         mAP_score = mAP(labels.cpu().detach().numpy(), output.cpu().detach().numpy())

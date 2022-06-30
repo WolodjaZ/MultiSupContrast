@@ -9,7 +9,6 @@ import torch
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import matplotlib.pyplot as plt
 import torch.backends.cudnn as cudnn
 import torchvision.transforms as transforms
 from torch.cuda.amp import GradScaler, autocast
@@ -187,7 +186,6 @@ def main():
                                 transforms.ToTensor(),
                                 ]))
             )
-    train_dataset = torch.utils.data.Subset(train_dataset, torch.arange(500))
     sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -253,7 +251,7 @@ def main():
     
     # Log wandb
     if args.rank == 0:
-        wandb.login(key="c77809672cac9c98eb589447ff82854fba590ff7")
+        wandb.login()
         if resume:
             wandb.init(
                 project="test-project", 
@@ -283,7 +281,8 @@ def main():
                     "feat-dim": args.feat_dim,
                     "c_treshold": args.c_treshold,
                     "seed": args.seed,
-                    "sync_bn": args.sync_bn
+                    "sync_bn": args.sync_bn,
+                    "numb_of_gpu_used": args.gpu_to_work_on
                 }
             )
         wandb.watch(model, log="all")
@@ -296,9 +295,14 @@ def main():
         labels_all = torch.cat(labels_all).numpy()
         df_labels = pd.DataFrame(labels_all)
         fig_corelation = px.imshow(df_labels.corr())
-        bars = labels_all.nonzero()[0]
-        fig_bar = px.histogram(bars)
-        wandb.run.summary.update({
+        fig_bar = px.bar(df_labels.sum(axis=0))
+        fig_bar.update_layout(
+            title="Number of occurence in dataset for each class",
+            xaxis_title="Class index",
+            yaxis_title="Occurance in dataset",
+            showlegend=False
+        )
+        wandb.log({
             "Barplot labels": fig_bar,
             "Correlation of labels": fig_corelation
         })
@@ -355,12 +359,12 @@ def main():
                 "loss": scores[1],
                 "learning_rate": optimizer.param_groups[0]["lr"],
                 "umap_embeddings": fig_validate,
-            }, step=scores[0])
+            }, step=epoch)
             # Update best loss
             if "loss" not in best.keys():
                 best = { 
-                    'epoch': scores[0],
-                    'model_state_dict': model.state_dict(),
+                    'epoch': epoch,
+                    'model_state_dict': model.module.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
                 }
@@ -371,8 +375,8 @@ def main():
             else:
                 if scores[1] < best["loss"]:
                     best = { 
-                        'epoch': scores[0],
-                        'model_state_dict': model.state_dict(),
+                        'epoch': epoch,
+                        'model_state_dict': model.module.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': scores[1],
                     }
@@ -385,13 +389,13 @@ def main():
                 checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
                 checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
                 torch.save({ 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
                     }, checkpoint_path)
                 torch.save({ 
-                    'epoch': scores[0],
+                    'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
@@ -520,7 +524,8 @@ def validate(train_loader, model, vis_3d=True):
             }
         )
         # Create scatter plot
-        fig = px.scatter_3d(df, x='x', y='y', z='z')
+        fig = px.scatter_3d(df, x='x', y='y', z='z', hover_data=
+                dict({'x': False, 'y': False, 'z': False, 'label': True}))
         # Tight layout
         fig.update_layout(margin=dict(l=0, r=0, b=0, t=0))
     else:
@@ -531,7 +536,8 @@ def validate(train_loader, model, vis_3d=True):
             }
         )
         # Create scatter plot
-        fig = px.scatter(df, x='x', y='y')
+        fig = px.scatter(df, x='x', y='y', hover_data=
+                dict({'x': False, 'y': False, 'label': True}))
         
     return fig
 

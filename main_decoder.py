@@ -25,8 +25,8 @@ def parse_option():
     parser.add_argument('--data', type=str, default='/home/MSCOCO_2014/')
     parser.add_argument('--data-name', type=str, default='COCO')
     parser.add_argument('--model-name', default='tresnet_l')
-    parser.add_argument('--model-path', default=None,
-        choices=['https://miil-public-eu.oss-eu-central-1.aliyuncs.com/model-zoo/ML_Decoder/tresnet_l_pretrain_ml_decoder.pth', None])
+    parser.add_argument('--model-path', default=None)
+        #'https://miil-public-eu.oss-eu-central-1.aliyuncs.com/model-zoo/ML_Decoder/tresnet_l_pretrain_ml_decoder.pth', None])
     parser.add_argument('--num-classes', type=int, default=80)
     parser.add_argument('--image-size', default=448, type=int,
                         metavar='N', help='input image size (default: 448)')
@@ -211,7 +211,7 @@ def main():
         pin_memory=True,
     )
     val_loader = torch.utils.data.DataLoader(
-        train_dataset,
+        val_dataset,
         shuffle=False,
         batch_size=128,
         num_workers=8
@@ -269,7 +269,7 @@ def main():
     
     # Log wandb
     if args.rank == 0:
-        wandb.login(key="c77809672cac9c98eb589447ff82854fba590ff7")
+        wandb.login()
         if resume:
             wandb.init(
                 project="test-project", 
@@ -296,7 +296,8 @@ def main():
                     "num-of-groups": args.num_of_groups,
                     "decoder-embedding": args.decoder_embedding,
                     "zsl": args.zsl,
-                    "sync_bn:": args.sync_bn
+                    "sync_bn:": args.sync_bn,
+                    "numb_of_gpu_used": args.gpu_to_work_on
                 }
             )
         wandb.watch(model, log="all")
@@ -353,7 +354,7 @@ def main():
             wandb.log({
                 "loss": scores[1],
                 "map": scores[2],
-                "learning_rate": optimizer.optim.param_groups[0]["lr"],
+                "learning_rate": optimizer.param_groups[0]["lr"],
                 "val_map": val_map,
                 "val_map_ema": val_map_ema,
             }, step=scores[0])
@@ -441,7 +442,7 @@ def train(train_loader, model, optimizer, criterion, scheduler, ema, epoch, logg
         # Compute loss
         with autocast():  # mixed precision
             output = model(images).float()  # sigmoid will be done in loss !
-        loss = criterion(output, labels)
+        loss = criterion(output, labels.float())
         # update metric
         losses.update(loss.item(), bsz)
         mAP_score = mAP(labels.cpu().detach().numpy(), output.cpu().detach().numpy())
