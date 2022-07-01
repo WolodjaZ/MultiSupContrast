@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=mutlisupcontrast_contr
 #SBATCH --partition=tesla
+#SBATCH --qos=tesla
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4

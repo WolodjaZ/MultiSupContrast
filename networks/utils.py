@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from urllib import request
 from networks.ml_decoder import MLDecoder
-from networks.tresnet import TResnetM, TResnetL, TResnetXL
+from networks.tresnet import TResnetS, TResnetM, TResnetL, TResnetXL
 from networks.resnet_big import Resnet18, Resnet34, Resnet50, Resnet101
 
 
@@ -14,7 +14,9 @@ def create_model_base(args, load_head=False):
     args = model_params['args']
     args.model_name = args.model_name.lower()
 
-    if args.model_name == 'tresnet_m':
+    if args.model_name == 'tresnet_s':
+        model = TResnetS(model_params)
+    elif args.model_name == 'tresnet_m':
         model = TResnetM(model_params)
     elif args.model_name == 'tresnet_l':
         model = TResnetL(model_params)
