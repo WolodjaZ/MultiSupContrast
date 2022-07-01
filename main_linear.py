@@ -477,7 +477,7 @@ def train(train_loader, model, optimizer, criterion, ema, epoch, logger, args):
         loss = criterion(output, labels.float())
         # update metric
         losses.update(loss.item(), bsz)
-        mAP_score = mAP(labels.cpu().detach().numpy(), output.cpu().detach().numpy())
+        mAP_score, _ = mAP(labels.cpu().detach().numpy(), output.cpu().detach().numpy())
         mAPs.update(mAP_score, bsz)
         
         # Optimizer
