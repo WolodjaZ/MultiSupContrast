@@ -4,6 +4,7 @@ import argparse
 import time
 import torch
 import wandb
+from sklearn.metrics import f1_score
 import torch.backends.cudnn as cudnn
 import torchvision.transforms as transforms
 from torch.optim import lr_scheduler, Adam
@@ -324,6 +325,8 @@ def main():
     ###############################
     best = {}
     ema = ModelEma(model, 0.9997)  # 0.9997^641=0.82
+    val_map = None
+    val_map_ema = None
     for epoch in range(start_epoch, args.epochs):
         
         # train the network for one epoch
@@ -348,19 +351,18 @@ def main():
         # save checkpoints
         if args.rank == 0:
             # Validate
-            val_map, val_map_ema = validate(val_loader, model, ema)
+            val_map, val_map_ema, mif1, maf1, sf1 = validate(val_loader, model, ema)
             logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map[0]:.3f}")
             # Log to wandb metrics
-            val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
-            val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
             wandb.log({
                 "loss": scores[1],
                 "map": scores[2],
                 "learning_rate": optimizer.param_groups[0]["lr"],
                 "val_map": val_map[0],
-                "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
                 "val_map_ema": val_map_ema[0],
-                "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
+                "micro_f1_score": mif1,
+                "macro_f1_score": maf1,
+                "samples_f1_score": sf1
             }, step=epoch)
             # Update best loss
             if "map" not in best.keys():
@@ -413,6 +415,13 @@ def main():
         wandb.run.summary["best_Mean Average Precision"] = best['map']
         wandb.run.summary["best_loss"] = best['loss']
         wandb.run.summary["best_epoch"] = best['epoch']
+        if val_map:
+            val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
+            val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
+            wandb.log({
+                "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
+                "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
+            })
         # End wandb
         wandb.finish()
 
@@ -495,10 +504,16 @@ def validate(val_loader, model, ema):
             outputs_ema.append(output_ema.cpu().detach())
             labels_all.append(labels.cpu().detach())
     
-    #Calc MAP
-    mAP_score, ap_score = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs).numpy())
-    mAP_score_ema, ap_score_ema = mAP(torch.cat(labels_all).numpy(), torch.cat(outputs_ema).numpy())
-    return (mAP_score, ap_score), (mAP_score_ema, ap_score_ema)
+    #Calc metrics
+    labels_all = torch.cat(labels_all).numpy()
+    outputs = torch.cat(outputs).numpy()
+    outputs_ema = torch.cat(outputs_ema).numpy()
+    mAP_score, ap_score = mAP(labels_all, outputs)
+    mAP_score_ema, ap_score_ema = mAP(labels_all, outputs_ema)
+    mif1 = max(f1_score(labels_all, outputs, average="micro"),f1_score(labels_all, outputs_ema, average="micro")) 
+    maf1 = max(f1_score(labels_all, outputs, average="macro"),f1_score(labels_all, outputs_ema, average="macro")) 
+    sf1 = max(f1_score(labels_all, outputs, average="samples"),f1_score(labels_all, outputs_ema, average="samples")) 
+    return (mAP_score, ap_score), (mAP_score_ema, ap_score_ema), mif1, maf1, sf1
 
 
 if __name__ == '__main__':

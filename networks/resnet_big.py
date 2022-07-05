@@ -168,7 +168,7 @@ def Resnet50(model_params):
     out_chans = 2048
     num_classes = model_params['num_classes']
     args = model_params['args']
-    model = ResNet(BasicBlock, [3, 4, 6, 3], num_features=out_chans, num_classes=num_classes)
+    model = ResNet(Bottleneck, [3, 4, 6, 3], num_features=out_chans, num_classes=num_classes)
     return model
 
 def Resnet101(model_params):
@@ -177,7 +177,7 @@ def Resnet101(model_params):
     out_chans = 2048
     num_classes = model_params['num_classes']
     args = model_params['args']
-    model = ResNet(BasicBlock, [3, 4, 23, 3], num_features=out_chans, num_classes=num_classes)
+    model = ResNet(Bottleneck, [3, 4, 23, 3], num_features=out_chans, num_classes=num_classes)
     return model
 
 

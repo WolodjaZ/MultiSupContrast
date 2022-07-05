@@ -348,6 +348,8 @@ def main():
     ###############################
     best = {}
     ema = ModelEma(model, 0.9997)
+    val_map = None
+    val_map_ema = None
     for epoch in range(start_epoch, args.epochs+1):
         
         # train the network for one epoch
@@ -373,19 +375,18 @@ def main():
         # save checkpoints
         if args.rank == 0:
             # Validate
-            val_map, val_map_ema = validate(val_loader, model, ema)
+            val_map, val_map_ema, mif1, maf1, sf1 = validate(val_loader, model, ema)
             logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map[0]:.3f}")
             # Log to wandb metrics
-            val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
-            val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
             wandb.log({
                 "loss": scores[1],
                 "map": scores[2],
                 "learning_rate": optimizer.param_groups[0]["lr"],
                 "val_map": val_map[0],
-                "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
                 "val_map_ema": val_map_ema[0],
-                "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
+                "micro_f1_score": mif1,
+                "macro_f1_score": maf1,
+                "samples_f1_score": sf1
             }, step=epoch)
             # Update best loss
             if "map" not in best.keys():
@@ -438,6 +439,13 @@ def main():
         wandb.run.summary["best_Mean Average Precision"] = best['map']
         wandb.run.summary["best_loss"] = best['loss']
         wandb.run.summary["best_epoch"] = best['epoch']
+        if val_map:
+            val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
+            val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
+            wandb.log({
+                "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
+                "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
+            })
         # End wandb
         wandb.finish()
 
