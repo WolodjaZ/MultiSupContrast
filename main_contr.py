@@ -177,7 +177,7 @@ def main():
             train_dataset = MultiLabelNUS(
                 args.data,
                 split="train",
-                transform=transforms.Compose([
+                transform=TwoCropTransform(transforms.Compose([
                                 transforms.RandomResizedCrop(size=args.image_size, scale=(0.6, 1.)),
                                 transforms.RandomHorizontalFlip(),
                                 transforms.RandomApply([
@@ -185,7 +185,7 @@ def main():
                                 ], p=0.8),
                                 transforms.RandomGrayscale(p=0.2),
                                 transforms.ToTensor(),
-                                ]),
+                                ])),
             )
     elif "CELEBA" in args.data_name:
         if args.data_name == "CELEBA":
