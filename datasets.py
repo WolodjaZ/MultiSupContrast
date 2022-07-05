@@ -9,6 +9,60 @@ from pycocotools.coco import COCO
 import xml.etree.ElementTree as ET
 from torchvision import datasets as datasets
 
+
+class MultiLabelNUS(torch.utils.data.Dataset):
+    def __init__(
+        self, 
+        data_path: str, 
+        split: str = "train",
+        transform = None,
+        target_transform=None,
+        ) -> None:
+        self.data_path = data_path
+        self.split = split
+        if not os.path.exists(data_path):
+            raise RuntimeError("Folder with data for IMaterialist not exists")
+        
+        self.classes_names = []
+        with open(os.path.join(data_path, "Concepts81.txt")) as f:
+            lines = f.readlines()
+            for line in lines:
+                self.classes_names.append(line.strip())
+                
+        self.labels = self._load_labels(os.path.join(data_path, "annotations.csv"))
+        self.file_names = list(self.labels.keys())
+        self.transform = transform
+        self.target_transform = target_transform
+    
+    def _load_labels(self, path: str):
+        row_data_dict = {}
+        with open(path, 'r') as file:
+            csvreader = csv.reader(file)
+            header = next(csvreader)
+            for row in csvreader:
+                if self.split == row[2].strip():
+                    classes = eval(row[1])
+                    row_data_dict[row[0]] = [0 for _ in range(81)]
+                    for class_in in classes:
+                        row_data_dict[row[0]][self.classes_names.index(class_in)] = 1
+        return row_data_dict
+    
+    def __len__(self):
+        return len(self.file_names)
+    
+    def __getitem__(self, index):
+        image = Image.open(os.path.join(self.data_path, self.file_names[index])).convert('RGB')
+        label = self.labels[self.file_names[index]]
+        target = torch.zeros((3, 81), dtype=torch.long)
+        target[0] = torch.tensor(label, dtype=torch.long)
+        
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+    
+    
 class MultiLabelCelebA(torch.utils.data.Dataset):
     def __init__(
         self, 

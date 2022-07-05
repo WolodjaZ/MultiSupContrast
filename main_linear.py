@@ -12,7 +12,7 @@ import torchvision.transforms as transforms
 from torch.cuda.amp import GradScaler, autocast
 
 from losses import AsymmetricLoss
-from datasets import CocoDetection, MultiLabelCelebA, VOCDataset
+from datasets import CocoDetection, MultiLabelCelebA, VOCDataset, MultiLabelNUS
 from networks.utils import create_model_base, add_classification_head
 from utils import init_distributed_mode, fix_random_seeds, mAP, ModelEma, \
     initialize_exp, AverageMeter, adjust_learning_rate, warmup_learning_rate
@@ -184,6 +184,29 @@ def main():
             ]),
             val=True
         )
+    elif "NUS" in args.data_name:
+        if args.data_name == "NUS":
+            train_dataset = MultiLabelNUS(
+                args.data,
+                split="train",
+                transform=transforms.Compose([
+                                transforms.RandomResizedCrop(size=args.image_size, scale=(0.6, 1.)),
+                                transforms.RandomHorizontalFlip(),
+                                transforms.RandomApply([
+                                    transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+                                ], p=0.8),
+                                transforms.RandomGrayscale(p=0.2),
+                                transforms.ToTensor(),
+                                ]),
+            )
+            val_dataset = MultiLabelNUS(
+                args.data,
+                split="val",
+                transform=transforms.Compose([
+                    transforms.Resize((args.image_size, args.image_size)),
+                    transforms.ToTensor()
+                ]),
+            )
     elif "CELEBA" in args.data_name:
         if args.data_name == "CELEBA":
             train_dataset = MultiLabelCelebA(
