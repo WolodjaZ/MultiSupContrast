@@ -80,7 +80,7 @@ def main():
     # Prepering environment
     args = parse_option().parse_args()
     fix_random_seeds(args.seed)
-    logger = initialize_exp(args, "epoch", "loss")
+    logger = initialize_exp(args, "epoch", "loss", ranksi=False)
     
     # Build data
     if "COCO" in args.data_name:

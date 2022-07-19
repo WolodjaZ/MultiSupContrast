@@ -51,7 +51,7 @@ def init_distributed_mode(args):
     return
 
 
-def initialize_exp(params, *args, dump_params=True):
+def initialize_exp(params, *args, dump_params=True, ranksi=True):
     """
     Initialize the experience:
     - dump parameters
@@ -65,9 +65,14 @@ def initialize_exp(params, *args, dump_params=True):
         pickle.dump(params, open(os.path.join(params.dump_path, "params.pkl"), "wb"))
 
     # create a logger
-    logger = create_logger(
-        os.path.join(params.dump_path, "train.log"), rank=params.rank
-    )
+    if ranksi:
+        logger = create_logger(
+            os.path.join(params.dump_path, "train.log"), rank=params.rank
+        )
+    else:
+        logger = create_logger(
+            os.path.join(params.dump_path, "train.log"), rank=0
+        )
     logger.info("============ Initialized logger ============")
     logger.info(
         "\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(params)).items()))
