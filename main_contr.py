@@ -321,9 +321,6 @@ def main():
         # train the network for one epoch
         logger.info(f"============ Starting epoch {epoch} ... ============")
         
-        # set sampler
-        train_loader.sampler.set_epoch(epoch)
-        
         # Adjuest learning rate
         adjust_learning_rate(args, optimizer, epoch)
         # train the network

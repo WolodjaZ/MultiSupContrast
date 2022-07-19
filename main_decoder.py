@@ -325,9 +325,6 @@ def main():
         # train the network for one epoch
         logger.info(f"============ Starting epoch {epoch} ... ============")
         
-        # set sampler
-        train_loader.sampler.set_epoch(epoch)
-        
         # train the network
         scores = train(
             train_loader,
