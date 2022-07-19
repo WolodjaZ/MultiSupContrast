@@ -15,7 +15,7 @@ from torch.cuda.amp import GradScaler, autocast
 
 from losses import MultiSupConLoss
 from networks.utils import create_model_base
-from utils import init_distributed_mode, fix_random_seeds, initialize_exp, \
+from utils import fix_random_seeds, initialize_exp, \
     AverageMeter, adjust_learning_rate, warmup_learning_rate
 from datasets import TwoCropTransform, CocoDetection, MultiLabelCelebA, \
     VOCDataset, MultiLabelNUS
@@ -64,20 +64,7 @@ def parse_option():
                         help='using cosine annealing')
     parser.add_argument('--warm', action='store_true',
                         help='warm-up for large batch training')
-    
-    ###############################
-    ####### dist parameters #######
-    ###############################
-    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up distributed
-                    training; see https://pytorch.org/docs/stable/distributed.html""")
-    parser.add_argument("--world_size", default=-1, type=int, help="""
-                        number of processes: it is set automatically and
-                        should not be passed as argument""")
-    parser.add_argument("--rank", default=0, type=int, help="""rank of this process:
-                        it is set automatically and should not be passed as argument""")
-    parser.add_argument("--local_rank", default=0, type=int,
-                        help="this argument is not used and should be ignored")
-    
+
     ###############################
     ####### other parameters ######
     ###############################
@@ -85,8 +72,6 @@ def parse_option():
                         metavar='N', help='mini-batch size')
     parser.add_argument('--epochs', type=int, default=1000,
                         help='number of training epochs')
-    parser.add_argument('--sync_bn', type=bool, default=False,
-                        help='synchronic batch only with distributed gpu')
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                         help='number of data loading workers')
     parser.add_argument("--checkpoint_freq", type=int, default=10,
@@ -105,7 +90,6 @@ def parse_option():
 def main():
     # Prepering environment
     args = parse_option().parse_args()
-    init_distributed_mode(args)
     fix_random_seeds(args.seed)
     logger = initialize_exp(args, "epoch", "loss")
     
@@ -202,11 +186,9 @@ def main():
                                 transforms.ToTensor(),
                                 ]))
             )
-    sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        shuffle=(sampler is None),
-        sampler=sampler,
+        shuffle=True,
         batch_size=args.batch_size,
         num_workers=args.workers,
         pin_memory=True,
@@ -215,9 +197,10 @@ def main():
     
     # Build model
     model = create_model_base(args)
-    # Synchronize batch norm layers
-    if args.sync_bn:
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    # Multi GPU
+    if torch.cuda.device_count() > 1:
+        logger.info("Let's use", torch.cuda.device_count(), "GPUs!")
+        model = torch.nn.DataParallel(model)
     # Copy model to GPU
     model = model.cuda()
     cudnn.benchmark = True
@@ -250,13 +233,6 @@ def main():
                           weight_decay=args.weight_decay)
     logger.info("Building optimizer and criterion done.")
     
-    # wrap model
-    model = torch.nn.parallel.DistributedDataParallel(
-        model,
-        device_ids=[args.gpu_to_work_on],
-        find_unused_parameters=True,
-    )
-    
     # Check for the checkpoints
     log_path = os.path.join(args.dump_path, f"run_{args.run}")
     if os.path.isdir(log_path):
@@ -266,21 +242,20 @@ def main():
         os.makedirs(log_path, exist_ok=True)
     
     # Log wandb
-    if args.rank == 0:
-        wandb.login()
-        if resume:
-            wandb.init(
-                project="test-project", 
-                entity="pwr-multisupcontr",
-                name=f"training_multi_sup_con_{args.run}",
-                resume=True 
-            )
-        else:
-            wandb.init(
-                project="test-project", 
-                entity="pwr-multisupcontr",
-                name=f"training_multi_sup_con_{args.run}",
-                config={
+    wandb.login()
+    if resume:
+        wandb.init(
+            project="test-project", 
+            entity="pwr-multisupcontr",
+            name=f"training_multi_sup_con_{args.run}",
+            resume=True 
+        )
+    else:
+        wandb.init(
+            project="test-project", 
+            entity="pwr-multisupcontr",
+            name=f"training_multi_sup_con_{args.run}",
+            config={
                     "data": args.data,
                     "image-size": args.image_size,
                     "batch-size": args.batch_size,
@@ -297,32 +272,30 @@ def main():
                     "feat-dim": args.feat_dim,
                     "c_treshold": args.c_treshold,
                     "seed": args.seed,
-                    "sync_bn": args.sync_bn,
-                    "numb_of_gpu_used": args.gpu_to_work_on
-                }
-            )
-        wandb.watch(model, log="all")
-        
-        # Log dataset plots
-        logger.info("Logging correlation and bar plot of labels.")
-        labels_all = []
-        for idx, (_, labels) in enumerate(train_loader):
-            labels_all.append(labels.max(dim=1)[0].cpu().detach())
-        labels_all = torch.cat(labels_all).numpy()
-        df_labels = pd.DataFrame(labels_all)
-        fig_corelation = px.imshow(df_labels.corr())
-        fig_bar = px.bar(df_labels.sum(axis=0))
-        fig_bar.update_layout(
-            title="Number of occurence in dataset for each class",
-            xaxis_title="Class index",
-            yaxis_title="Occurance in dataset",
-            showlegend=False
+            }
         )
-        wandb.log({
-            "Barplot labels": fig_bar,
-            "Correlation of labels": fig_corelation
-        })
-        logger.info("Finished logging correlation and bar plot of labels.")
+    wandb.watch(model, log="all")
+        
+    # Log dataset plots
+    logger.info("Logging correlation and bar plot of labels.")
+    labels_all = []
+    for idx, (_, labels) in enumerate(train_loader):
+        labels_all.append(labels.max(dim=1)[0].cpu().detach())
+    labels_all = torch.cat(labels_all).numpy()
+    df_labels = pd.DataFrame(labels_all)
+    fig_corelation = px.imshow(df_labels.corr())
+    fig_bar = px.bar(df_labels.sum(axis=0))
+    fig_bar.update_layout(
+        title="Number of occurence in dataset for each class",
+        xaxis_title="Class index",
+        yaxis_title="Occurance in dataset",
+        showlegend=False
+    )
+    wandb.log({
+        "Barplot labels": fig_bar,
+        "Correlation of labels": fig_corelation
+    })
+    logger.info("Finished logging correlation and bar plot of labels.")
         
     # Load checkpoint
     if resume:
@@ -330,14 +303,12 @@ def main():
         checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
         checkpoint_best = os.path.join(log_path, "best_checkpoint.pth.tar")
         logger.info(f"Loading checkpooint {checkpoint_last}")
-        checkpoint = torch.load(checkpoint_last,
-               map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
+        checkpoint = torch.load(checkpoint_last)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         loss = checkpoint['loss']
-        best = torch.load(checkpoint_best,
-            map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
+        best = torch.load(checkpoint_best)
     else:
         start_epoch = 1
         best = {}
@@ -366,21 +337,31 @@ def main():
             args
         )
         
-        # save checkpoints
-        if args.rank == 0:
-            # Validate
-            fig_validate = validate(train_loader, model, args.vis_3d)
-            # Log to wandb metrics
-            wandb.log({
-                "loss": scores[1],
-                "learning_rate": optimizer.param_groups[0]["lr"],
-                "umap_embeddings": fig_validate,
-            }, step=epoch)
-            # Update best loss
-            if "loss" not in best.keys():
+        # Validate
+        fig_validate = validate(train_loader, model, args.vis_3d)
+        # Log to wandb metrics
+        wandb.log({
+            "loss": scores[1],
+            "learning_rate": optimizer.param_groups[0]["lr"],
+            "umap_embeddings": fig_validate,
+        }, step=epoch)
+        # Update best loss
+        if "loss" not in best.keys():
+            best = { 
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': scores[1],
+            }
+            # Save best loss
+            checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
+            torch.save(best, checkpoint_path)
+            wandb.save(checkpoint_path)
+        else:
+            if scores[1] < best["loss"]:
                 best = { 
                     'epoch': epoch,
-                    'model_state_dict': model.module.state_dict(),
+                    'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
                 }
@@ -388,41 +369,28 @@ def main():
                 checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
                 torch.save(best, checkpoint_path)
                 wandb.save(checkpoint_path)
-            else:
-                if scores[1] < best["loss"]:
-                    best = { 
-                        'epoch': epoch,
-                        'model_state_dict': model.module.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': scores[1],
-                    }
-                    # Save best loss
-                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
-                    torch.save(best, checkpoint_path)
-                    wandb.save(checkpoint_path)
-            # Save our checkpoint loc
-            if epoch % args.checkpoint_freq == 0 or epoch == args.epochs:
-                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
-                checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
-                torch.save({ 
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': scores[1],
-                    }, checkpoint_path)
-                torch.save({ 
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': scores[1],
-                    }, checkpoint_last)
-                wandb.save(checkpoint_last)
+        # Save our checkpoint loc
+        if epoch % args.checkpoint_freq == 0 or epoch == args.epochs:
+            checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
+            checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
+            torch.save({ 
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': scores[1],
+                }, checkpoint_path)
+            torch.save({ 
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': scores[1],
+                }, checkpoint_last)
+            wandb.save(checkpoint_last)
 
-    if args.rank == 0:
-        # End wandb
-        wandb.run.summary["best_loss"] = best['loss']
-        wandb.run.summary["best_epoch"] = best['epoch']
-        wandb.finish()
+    # End wandb
+    wandb.run.summary["best_loss"] = best['loss']
+    wandb.run.summary["best_epoch"] = best['epoch']
+    wandb.finish()
 
     ###############################
     ########### Finished ##########
@@ -484,7 +452,7 @@ def train(train_loader, model, optimizer, criterion, epoch, logger, args):
         batch_time.update(time.time() - end)
         end = time.time()
         
-        if args.rank == 0 and idx % 50 == 0:
+        if dx % 50 == 0:
             logger.info((
                 f'Train: Epoch [{epoch}], Step [{idx}/{len(train_loader)}], Loss: {loss.item():.3f}, '
                 f'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f}), '

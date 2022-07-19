@@ -11,9 +11,9 @@ from torch.optim import lr_scheduler, Adam
 from torch.cuda.amp import GradScaler, autocast
 
 from losses import AsymmetricLoss
-from datasets import CocoDetection, MultiLabelCelebA, VOCDataset, MultiLabelNUS
+from datasets import CocoDetection, MultiLabelCelebA, VOCDataset, MultiLabelNUS, CUB
 from networks.utils import create_model_base, add_ml_decoder_head
-from utils import init_distributed_mode, fix_random_seeds, mAP, \
+from utils import fix_random_seeds, mAP, \
     initialize_exp, AverageMeter, add_weight_decay, ModelEma
 
 
@@ -49,19 +49,6 @@ def parse_option():
                         help='weight decay')
     
     ###############################
-    ####### dist parameters #######
-    ###############################
-    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up distributed
-                    training; see https://pytorch.org/docs/stable/distributed.html""")
-    parser.add_argument("--world_size", default=-1, type=int, help="""
-                        number of processes: it is set automatically and
-                        should not be passed as argument""")
-    parser.add_argument("--rank", default=0, type=int, help="""rank of this process:
-                        it is set automatically and should not be passed as argument""")
-    parser.add_argument("--local_rank", default=0, type=int,
-                        help="this argument is not used and should be ignored")
-    
-    ###############################
     ####### other parameters ######
     ###############################
     parser.add_argument('--method', type=str, default='CrossEntropy',
@@ -72,8 +59,6 @@ def parse_option():
                         metavar='N', help='mini-batch size')
     parser.add_argument('--epochs', type=int, default=40,
                         help='number of training epochs')
-    parser.add_argument('--sync_bn', type=bool, default=False,
-                        help='synchronic batch only with distributed gpu')
     parser.add_argument('--feat-dim', type=int, default=128,
                         help='feature dimension for contrastive learning')
     parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
@@ -94,7 +79,6 @@ def parse_option():
 def main():
     # Prepering environment
     args = parse_option().parse_args()
-    init_distributed_mode(args)
     fix_random_seeds(args.seed)
     logger = initialize_exp(args, "epoch", "loss")
     
@@ -225,11 +209,9 @@ def main():
                 transforms.ToTensor()
             ]),
         )
-    sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
-        shuffle=(sampler is None),
-        sampler=sampler,
+        shuffle=True,
         batch_size=args.batch_size,
         num_workers=args.workers,
         pin_memory=True,
@@ -244,8 +226,7 @@ def main():
     model = create_model_base(args)
     if args.model_path:
         # Loading model
-        checkpoint = torch.load(args.model_path,
-            map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
+        checkpoint = torch.load(args.model_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         # freeze
         if args.freeze:
@@ -253,9 +234,10 @@ def main():
                 param.requires_grad = False
     # Adding classification head
     model = add_ml_decoder_head(model, args.num_classes)
-    # Synchronize batch norm layers
-    if args.sync_bn:
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+    # Multi GPU
+    if torch.cuda.device_count() > 1:
+        logger.info("Let's use", torch.cuda.device_count(), "GPUs!")
+        model = torch.nn.DataParallel(model)
     # Copy model to GPU
     model = model.cuda()
     cudnn.benchmark = True
@@ -276,13 +258,6 @@ def main():
                                         pct_start=0.2)
     logger.info("Building optimizer, criterion and learing scheduler done.")
     
-    # wrap model
-    model = torch.nn.parallel.DistributedDataParallel(
-        model,
-        device_ids=[args.gpu_to_work_on],
-        find_unused_parameters=True,
-    )
-    
     # Check for the checkpoints
     log_path = os.path.join(args.dump_path, f"run_{args.run}")
     if os.path.isdir(log_path):
@@ -292,17 +267,16 @@ def main():
         os.makedirs(log_path, exist_ok=True)
     
     # Log wandb
-    if args.rank == 0:
-        wandb.login()
-        if resume:
-            wandb.init(
-                project="test-project", 
-                entity="pwr-multisupcontr",
-                name=f"validating_linear_multi_sup_con_{args.run}",
-                resume=True 
-            )
-        else:
-            wandb.init(
+    wandb.login()
+    if resume:
+        wandb.init(
+            project="test-project", 
+            entity="pwr-multisupcontr",
+            name=f"validating_linear_multi_sup_con_{args.run}",
+            resume=True 
+        )
+    else:
+        wandb.init(
                 project="test-project", 
                 entity="pwr-multisupcontr",
                 name=f"ml_decoder_{args.method_used}_{args.run}",
@@ -319,26 +293,22 @@ def main():
                     "use-ml-decoder": args.use_ml_decoder,
                     "num-of-groups": args.num_of_groups,
                     "decoder-embedding": args.decoder_embedding,
-                    "zsl": args.zsl,
-                    "sync_bn:": args.sync_bn,
-                    "numb_of_gpu_used": args.gpu_to_work_on
+                    "zsl": args.zsl
                 }
-            )
-        wandb.watch(model, log="all")
+        )
+    wandb.watch(model, log="all")
     
     # Load checkpoint
     if resume:
         # Get last restore
         checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
         checkpoint_best = os.path.join(log_path, "best_checkpoint.pth.tar")
-        checkpoint = torch.load(checkpoint_last,
-            map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
+        checkpoint = torch.load(checkpoint_last)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         loss = checkpoint['loss']
-        best = torch.load(checkpoint_best,
-            map_location="cuda:" + str(torch.distributed.get_rank() % torch.cuda.device_count()))
+        best = torch.load(checkpoint_best)
     else:
         start_epoch = 0
         best = {}
@@ -371,82 +341,79 @@ def main():
             args
         )
 
-        # save checkpoints
-        if args.rank == 0:
-            # Validate
-            val_map, val_map_ema, mif1, maf1, sf1 = validate(val_loader, model, ema)
-            logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map[0]:.3f}")
-            # Log to wandb metrics
-            wandb.log({
-                "loss": scores[1],
-                "map": scores[2],
-                "learning_rate": optimizer.param_groups[0]["lr"],
-                "val_map": val_map[0],
-                "val_map_ema": val_map_ema[0],
-                "micro_f1_score": mif1,
-                "macro_f1_score": maf1,
-                "samples_f1_score": sf1
-            }, step=epoch)
-            # Update best loss
-            if "map" not in best.keys():
-                best = { 
+        # Validate
+        val_map, val_map_ema, mif1, maf1, sf1 = validate(val_loader, model, ema)
+        logger.info(f"Validate: Epoch [{epoch}], Mean Average Precision: {val_map[0]:.3f}")
+        # Log to wandb metrics
+        wandb.log({
+                    "loss": scores[1],
+                    "map": scores[2],
+                    "learning_rate": optimizer.param_groups[0]["lr"],
+                    "val_map": val_map[0],
+                    "val_map_ema": val_map_ema[0],
+                    "micro_f1_score": mif1,
+                    "macro_f1_score": maf1,
+                    "samples_f1_score": sf1
+        }, step=epoch)
+        # Update best loss
+        if "map" not in best.keys():
+            best = { 
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
                     'map': max(val_map[0], val_map_ema[0]),
-                }
-                # Save best loss
-                checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
-                torch.save(best, checkpoint_path)
-                wandb.save(checkpoint_path)
-            else:
-                if max(val_map[0], val_map_ema[0]) > best["map"]:
-                    best = { 
+            }
+            # Save best loss
+            checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
+            torch.save(best, checkpoint_path)
+            wandb.save(checkpoint_path)
+        else:
+            if max(val_map[0], val_map_ema[0]) > best["map"]:
+                best = { 
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': scores[1],
                         'map': max(val_map[0], val_map_ema[0]),
-                    }
-                    # Save best loss
-                    checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
-                    torch.save(best, checkpoint_path)
-                    wandb.save(checkpoint_path)
-            # Save our checkpoint loc
-            if epoch % args.checkpoint_freq == 0 or epoch == args.epochs:
-                checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
-                checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
-                torch.save({ 
+                }
+                # Save best loss
+                checkpoint_path = os.path.join(log_path, f"best_checkpoint.pth.tar")
+                torch.save(best, checkpoint_path)
+                wandb.save(checkpoint_path)
+        # Save our checkpoint loc
+        if epoch % args.checkpoint_freq == 0 or epoch == args.epochs:
+            checkpoint_path = os.path.join(log_path, f"{epoch}_checkpoint.pth.tar")
+            checkpoint_last = os.path.join(log_path, "last_checkpoint.pth.tar")
+            torch.save({ 
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
                     'map': max(val_map[0], val_map_ema[0]),
                     }, checkpoint_path)
-                torch.save({ 
+            torch.save({ 
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': scores[1],
                     'map': max(val_map[0], val_map_ema[0]),
                     }, checkpoint_last)
-                wandb.save(checkpoint_last)
+            wandb.save(checkpoint_last)
 
-    if args.rank == 0:
-        #Log final metrics
-        wandb.run.summary["best_Mean Average Precision"] = best['map']
-        wandb.run.summary["best_loss"] = best['loss']
-        wandb.run.summary["best_epoch"] = best['epoch']
-        if val_map:
-            val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
-            val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
-            wandb.log({
-                "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
-                "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
-            })
-        # End wandb
-        wandb.finish()
+    #Log final metrics
+    wandb.run.summary["best_Mean Average Precision"] = best['map']
+    wandb.run.summary["best_loss"] = best['loss']
+    wandb.run.summary["best_epoch"] = best['epoch']
+    if val_map:
+        val_ap = [(i, val_map[1][i]) for i in range(len(val_map[1]))]
+        val_ap_ema = [(i, val_map_ema[1][i]) for i in range(len(val_map_ema[1]))]
+        wandb.log({
+            "val_ap": wandb.Table(data=val_ap, columns=["class_id", "Average_precision"]),
+            "val_ap_ema": wandb.Table(data=val_ap_ema, columns=["class_id", "Average_precision"])
+        })
+    # End wandb
+    wandb.finish()
 
     ###############################
     ########### Finished ##########
@@ -497,7 +464,7 @@ def train(train_loader, model, optimizer, criterion, scheduler, ema, epoch, logg
         batch_time.update(time.time() - end)
         end = time.time()
         
-        if args.rank == 0 and idx % 50 == 0:
+        if idx % 50 == 0:
             logger.info((
                 f'Train: Epoch [{epoch}], Step [{idx}/{len(train_loader)}], '
                 f'Loss: {loss.item():.3f}, Mean Average Precision: {mAP_score:.3f}, '
@@ -537,6 +504,35 @@ def validate(val_loader, model, ema):
     maf1 = max(f1_score(labels_all, outputs, average="macro"),f1_score(labels_all, outputs_ema, average="macro")) 
     sf1 = max(f1_score(labels_all, outputs, average="samples"),f1_score(labels_all, outputs_ema, average="samples")) 
     return (mAP_score, ap_score), (mAP_score_ema, ap_score_ema), mif1, maf1, sf1
+
+def validate_sing(val_loader, model, ema):
+    model.eval()
+    
+    labels_all = []
+    outputs = []
+    outputs_ema = []
+    
+    with torch.no_grad():
+        for idx, (images, labels) in enumerate(val_loader):
+            labels = labels.max(dim=1)[0]
+            if torch.cuda.is_available():
+                images = images.cuda()
+            with autocast():
+                _, output = torch.max(model(images.cuda()).cpu(), 1)
+                _, output_ema = torch.max(ema.module(images.cuda()).cpu(), 1)
+            # Gather results
+            outputs.append(output.cpu().detach())
+            outputs_ema.append(output_ema.cpu().detach())
+            labels_all.append(labels.cpu().detach())
+    
+    #Calc metrics
+    labels_all = torch.cat(labels_all).numpy()
+    outputs = torch.cat(outputs).numpy()
+    outputs_ema = torch.cat(outputs_ema).numpy()
+    mif1 = max(f1_score(labels_all, outputs, average="micro"),f1_score(labels_all, outputs_ema, average="micro")) 
+    maf1 = max(f1_score(labels_all, outputs, average="macro"),f1_score(labels_all, outputs_ema, average="macro")) 
+    sf1 = max(f1_score(labels_all, outputs, average="samples"),f1_score(labels_all, outputs_ema, average="samples")) 
+    return (mif1, None), (maf1, None), (sf1, None)
 
 
 if __name__ == '__main__':

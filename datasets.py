@@ -1,6 +1,7 @@
 import os
 import csv
 import torch
+import pickle
 import random
 import numpy as np
 
@@ -10,6 +11,105 @@ import xml.etree.ElementTree as ET
 from torchvision import datasets as datasets
 
 
+class CUBE(torch.utils.data.Dataset):
+    def __init__(
+        self, 
+        data_path: str, 
+        split: str = "train",
+        certainty: str = 'definitely',
+        multi=True,
+        transform = None,
+        target_transform=None,
+        boxcrop=None
+        ) -> None:
+        self.data_path = data_path
+        self.split = split
+        self.certainty = certainty
+        self.boxcrop = boxcrop
+        self.multi = multi
+        if not os.path.exists(data_path):
+            raise RuntimeError("Folder with data for IMaterialist not exists")
+        
+        if split == "train":
+            file_load = os.path.join(self.data_path, "train.pkl")
+        elif split == "val":
+            file_load = os.path.join(self.data_path, "val.pkl")
+        self.file_names, self.labels = self._load_data(file_load)        
+        self.boxes = self._load_boxes(os.path.join(data_path, "bounding_boxes.txt"))
+        self.transform = transform
+        self.target_transform = target_transform
+    
+    def _load_data(self, path: str):
+        row_class_dict = {}
+        row_filename_dict = {}
+        if self.certainty == "definitely":
+            certainty_keep = [4]
+        elif self.certainty == "probably":
+            certainty_keep = [4, 3]
+        elif self.certainty == "guessing":
+            certainty_keep = [4, 3, 2]
+        elif self.certainty == "not visible":
+            certainty_keep = [4, 3, 2, 1]
+        with open(path, 'rb') as file:
+            file_list = pickle.load(file)
+            for file_info in file_list:
+                image_id = file_info['id']
+                img_full_path = file_info['img_path']
+                img_path_dir = img_full_path.split('/')
+                img_path = os.path.join(*img_path_dir[-3:])
+                if self.multi:
+                    attrs = file_info['attribute_label']
+                    centrs = file_info['attribute_certainty']
+                    for idx in range(len(attrs)):
+                        if attrs[idx] and centrs[idx] not in certainty_keep:
+                            attrs[idx] = 0
+                    if sum(attrs) > 0:
+                        row_filename_dict[image_id] = img_path
+                        row_class_dict[image_id] = attrs
+                else:
+                    row_filename_dict[image_id] = img_path
+                    row_class_dict[image_id] = [0 for _ in range(200)] 
+                    row_class_dict[image_id][file_info['class_label']] = 1
+
+        return row_filename_dict, row_class_dict
+    
+    def _load_boxes(self, path: str):
+        row_data_dict = {}
+        with open(path, 'r') as file:
+            lines = file.readlines()
+            for line in lines:
+                line_list = line.split(' ')
+                if int(line_list[0]) in list(self.labels.keys()):
+                    x1 = float(line_list[1])
+                    y1 = float(line_list[2])
+                    x2 = x1 + float(line_list[3])
+                    y2 = y1 + float(line_list[4])
+                    row_data_dict[int(line_list[0])] = [[x1,y1,x2,y2]]
+                    
+        return row_data_dict
+
+    def __len__(self):
+        return len(self.file_names)
+    
+    def __getitem__(self, index):
+        image_id = list(self.file_names.keys())[index]
+        image = Image.open(os.path.join(self.data_path, self.file_names[image_id])).convert('RGB')
+        label = self.labels[image_id]
+        if self.multi:
+            target = torch.zeros((3, 112), dtype=torch.long)
+        else:
+            target = torch.zeros((3, 200), dtype=torch.long)
+        target[0] = torch.tensor(label, dtype=torch.long)
+        
+        if self.boxcrop:
+            image = crop_box(image, self.boxes[image_id], self.boxcrop, cut_img=0.2)
+        if self.transform is not None:
+            image = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        return image, target
+    
+    
 class MultiLabelNUS(torch.utils.data.Dataset):
     def __init__(
         self, 
