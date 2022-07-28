@@ -273,13 +273,15 @@ def main():
                 project="test-project", 
                 entity="pwr-multisupcontr",
                 name=f"training_multi_sup_con_{args.run}",
-                resume=True 
+                id=f"training_multi_sup_con_{args.run}",
+                resume="allow"
             )
         else:
             wandb.init(
                 project="test-project", 
                 entity="pwr-multisupcontr",
                 name=f"training_multi_sup_con_{args.run}",
+                id=f"training_multi_sup_con_{args.run}",
                 config={
                     "data": args.data,
                     "image-size": args.image_size,
