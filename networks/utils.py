@@ -61,6 +61,7 @@ def add_mulitsupcon_head(model, head='mlp', feat_dim=128):
     num_features = model.num_features
     if hasattr(model, 'head'):
         del model.head
+        model.normalize = True
         if head == 'linear':
             model.head = nn.Linear(num_features, feat_dim)
         elif head == 'mlp':
@@ -79,6 +80,7 @@ def add_mulitsupcon_head(model, head='mlp', feat_dim=128):
     return model
 
 def add_classification_head(model, num_classes=-1):
+    model.normalize = False
     if num_classes == -1:
         num_classes = model.num_classes
     num_features = model.num_features
@@ -92,6 +94,7 @@ def add_classification_head(model, num_classes=-1):
     return model
 
 def add_ml_decoder_head(model, num_classes=-1, num_of_groups=-1, decoder_embedding=768, zsl=0):
+    model.normalize = False
     if num_classes == -1:
         num_classes = model.num_classes
     num_features = model.num_features

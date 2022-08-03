@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from collections import OrderedDict
 from torch.nn import Module as Module
 from inplace_abn import InPlaceABN, ABN
@@ -137,6 +138,7 @@ class TResNet(Module):
         global_pool_layer = FastAvgPool2d(flatten=True)
 
         # TResnet stages
+        self.normalize = False
         self.inplanes = int(64 * width_factor)
         self.planes = int(64 * width_factor)
         conv1 = conv2d_ABN(in_chans * 16, self.planes, stride=1, kernel_size=3)
@@ -202,7 +204,10 @@ class TResNet(Module):
     def forward(self, x):
         x = self.body(x)
         self.embeddings = self.global_pool(x)
-        logits = self.head(self.embeddings)
+        if self.normalize:
+            logits = F.normalize(self.head(self.embeddings))
+        else:
+            logits = self.head(self.embeddings)
         return logits
 
 

@@ -83,6 +83,7 @@ class Bottleneck(nn.Module):
 class ResNet(nn.Module):
     def __init__(self, block, num_blocks, num_features, num_classes=1000, in_channel=3, zero_init_residual=False):
         super(ResNet, self).__init__()
+        self.normalize = False
         self.in_planes = 64
         self.num_features = num_features
         conv1 = nn.Sequential(
@@ -141,7 +142,10 @@ class ResNet(nn.Module):
     def forward(self, x, layer=100):
         x = self.body(x)
         self.embeddings  = self.global_pool(x)
-        logits = self.head(self.embeddings)
+        if self.normalize:
+            logits = F.normalize(self.head(self.embeddings))
+        else:
+            logits = self.head(self.embeddings)
         return logits
 
 def Resnet18(model_params):
